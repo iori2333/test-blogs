@@ -40,23 +40,15 @@ def gh(args: list[str], check: bool = True) -> str:
 
 
 def gh_api_list_issues(repo: str) -> list[dict]:
-    """Fetch all open blog Issues via GitHub API, handling pagination."""
-    all_issues = []
-    page = 1
-    while True:
-        resp = gh([
-            "api", f"repos/{repo}/issues",
-            "-f", f"labels={BLOG_LABEL}",
-            "-f", "state=open",
-            "-f", "per_page=100",
-            "-f", f"page={page}",
-        ])
-        items = json.loads(resp)
-        if not items:
-            break
-        all_issues.extend(items)
-        page += 1
-    return all_issues
+    """Fetch all open blog Issues via gh issue list."""
+    resp = gh([
+        "issue", "list", "--repo", repo,
+        "--state", "open",
+        "--label", BLOG_LABEL,
+        "--json", "number,body",
+        "--limit", "100",
+    ], check=False)
+    return json.loads(resp) if resp.strip() else []
 
 
 def build_issue_map(repo: str) -> dict[str, str]:

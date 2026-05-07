@@ -1,0 +1,36 @@
+name: Sync Blog Posts to Issues
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'posts/**/*.md'
+  workflow_dispatch:
+
+concurrency:
+  group: blog-sync
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Sync blog posts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python scripts/sync-blogs.py

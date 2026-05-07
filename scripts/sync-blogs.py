@@ -226,25 +226,15 @@ def update_issue(issue_number: str, filepath: Path, frontmatter: dict, repo: str
         body_file = f.name
 
     try:
+        # gh issue edit requires --title whenever labels are changed (newer gh)
         subprocess.run(
             ["gh", "issue", "edit", issue_number, "--repo", repo,
-             "--title", title, "--body-file", body_file],
-            capture_output=True,
-            text=True,
-        )
-
-        # Remove old blog-related labels first, then add new ones
-        subprocess.run(
-            ["gh", "issue", "edit", issue_number, "--repo", repo,
-             "--remove-label", BLOG_LABEL],
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["gh", "issue", "edit", issue_number, "--repo", repo,
+             "--title", title, "--body-file", body_file,
+             "--remove-label", BLOG_LABEL,
              "--add-label", ",".join(labels)],
             capture_output=True,
             text=True,
+            check=True,
         )
         print(f"  Updated issue #{issue_number} for {filepath}")
     finally:

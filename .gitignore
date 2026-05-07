@@ -1,3 +1,11 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Hugo
+public/
+resources/
+.hugo_build.lock
+
+# Pagefind
+.pagefind-bin/

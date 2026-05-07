@@ -1,0 +1,34 @@
+baseURL = "https://iori2333.github.io/test-blogs/"
+languageCode = "zh-cn"
+defaultContentLanguage = "zh"
+title = "Blog"
+theme = "PaperMod"
+
+[params]
+  env = "production"
+  description = "Personal blog"
+  defaultTheme = "auto"
+  ShowShareButtons = false
+  ShowReadingTime = true
+  ShowPostCover = true
+  ShowCodeCopyButtons = true
+  ShowToc = true
+
+[params.homeInfoParams]
+  Title = "Blog"
+  Content = "Welcome to my blog."
+
+[params.socialIcons]
+  - name = "github"
+    url = "https://github.com/iori2333"
+
+[outputs]
+  home = ["HTML", "RSS"]
+
+[markup]
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+
+[taxonomies]
+  tag = "tags"

@@ -1,0 +1,5 @@
+{{- $src := .Destination -}}
+{{- if hasPrefix $src "../" -}}
+  {{- $src = printf "/%s" (strings.TrimPrefix "../" $src) -}}
+{{- end -}}
+<img src="{{ $src | safeURL }}" alt="{{ .Text }}" {{ with .Title }}title="{{ . }}"{{ end }} loading="lazy">

@@ -1,0 +1,10 @@
+{{- if .Params.cover -}}
+  {{- $cover := .Params.cover -}}
+  {{- $alt := (.Params.coverAlt | default .Title | default "Cover") -}}
+  {{- $isURL := or (hasPrefix $cover "http://") (hasPrefix $cover "https://") -}}
+  {{- if $isURL -}}
+    <img loading="lazy" decoding="async" src="{{ $cover | safeURL }}" alt="{{ $alt }}" class="cover" />
+  {{- else -}}
+    <img loading="lazy" decoding="async" src="{{ $cover | relURL }}" alt="{{ $alt }}" class="cover" />
+  {{- end -}}
+{{- end -}}

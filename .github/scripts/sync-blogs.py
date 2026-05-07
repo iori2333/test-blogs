@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Sync blog markdown files to GitHub Issues and vice versa."""
 
+import hashlib
 import json
 import os
 import posixpath
@@ -19,11 +20,11 @@ except ImportError:
     sys.exit(1)
 
 POSTS_DIR = Path("posts")
-MARKER_TEMPLATE = "<!-- blog-sync: path={} -->"
+MARKER_TEMPLATE = "<!-- blog-sync: path={} hash={} -->"
 BLOG_LABEL = "blog"
 
-# Cache: {rel_file_path: issue_number}
-_issue_map: dict[str, str] = {}
+# Cache: {rel_file_path: (issue_number, stored_hash)}
+_issue_map: dict[str, tuple[str, str]] = {}
 
 
 def gh(args: list[str], check: bool = True) -> str:
@@ -51,8 +52,8 @@ def gh_api_list_issues(repo: str) -> list[dict]:
     return json.loads(resp) if resp.strip() else []
 
 
-def build_issue_map(repo: str) -> dict[str, str]:
-    """Build {file_path: issue_number} mapping from existing blog Issues.
+def build_issue_map(repo: str) -> dict[str, tuple[str, str]]:
+    """Build {file_path: (issue_number, hash)} mapping from existing blog Issues.
 
     Only considers issues created by github-actions[bot] to avoid
     accidentally processing user-created issues with similar markers.
@@ -63,9 +64,14 @@ def build_issue_map(repo: str) -> dict[str, str]:
         if author.get("is_bot") is not True:
             continue
         body = issue.get("body") or ""
+        match = re.search(r"<!-- blog-sync: path=(.+?) hash=(\w+) -->", body)
+        if match:
+            mapping[match.group(1)] = (str(issue["number"]), match.group(2))
+            continue
+        # Backward compat: old marker without hash
         match = re.search(r"<!-- blog-sync: path=(.+?) -->", body)
         if match:
-            mapping[match.group(1)] = str(issue["number"])
+            mapping[match.group(1)] = (str(issue["number"]), "")
     return mapping
 
 
@@ -89,6 +95,11 @@ def extract_body(filepath: Path) -> str:
     content = filepath.read_text()
     match = re.match(r"^---\s*\n.*?\n---\s*\n(.*)", content, re.DOTALL)
     return match.group(1).strip() if match else content.strip()
+
+
+def file_hash(filepath: Path) -> str:
+    """Compute md5 hash of the raw file content."""
+    return hashlib.md5(filepath.read_bytes()).hexdigest()
 
 
 def convert_single_path(src: str, base_url: str) -> str:
@@ -149,7 +160,8 @@ def build_issue_body(filepath: Path, frontmatter: dict, repo: str) -> str:
     parts.append("")
 
     # Hidden marker for file-to-Issue mapping
-    parts.append(MARKER_TEMPLATE.format(rel_path))
+    md5 = file_hash(filepath)
+    parts.append(MARKER_TEMPLATE.format(rel_path, md5))
 
     return "\n".join(parts)
 
@@ -180,8 +192,8 @@ def ensure_label(label: str, repo: str) -> None:
         )
 
 
-def find_issue_for_file(filepath: Path) -> str | None:
-    """Look up the Issue number from the in-memory mapping."""
+def find_issue_for_file(filepath: Path) -> tuple[str, str] | None:
+    """Look up the Issue number and stored hash from the in-memory mapping."""
     rel_path = str(filepath.relative_to(Path(".")))
     return _issue_map.get(rel_path)
 
@@ -228,7 +240,8 @@ def create_issue(filepath: Path, frontmatter: dict, repo: str) -> str | None:
 
     number = str(result["number"])
     rel_path = str(filepath.relative_to(Path(".")))
-    _issue_map[rel_path] = number
+    md5 = file_hash(filepath)
+    _issue_map[rel_path] = (number, md5)
     print(f"  Created issue #{number} for {filepath}")
     return number
 
@@ -285,8 +298,13 @@ def sync_forward(repo: str) -> list[str]:
 
         active_paths.append(str(filepath))
 
-        issue_number = find_issue_for_file(filepath)
-        if issue_number:
+        issue_info = find_issue_for_file(filepath)
+        if issue_info:
+            issue_number, stored_hash = issue_info
+            current_hash = file_hash(filepath)
+            if current_hash == stored_hash:
+                print(f"  Skipped {filepath} (unchanged)")
+                continue
             update_issue(issue_number, filepath, frontmatter, repo)
         else:
             create_issue(filepath, frontmatter, repo)
@@ -296,7 +314,7 @@ def sync_forward(repo: str) -> list[str]:
 
 def sync_reverse(repo: str, active_paths: list[str]) -> None:
     """Find Issues for deleted files and close them using in-memory mapping."""
-    for file_path, issue_number in dict(_issue_map).items():
+    for file_path, (issue_number, _) in dict(_issue_map).items():
         if file_path not in active_paths:
             close_issue(issue_number, repo)
 

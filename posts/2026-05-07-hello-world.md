@@ -12,4 +12,6 @@ description: "第一篇博客，测试 GitHub Issues 博客同步系统。"
 
 Markdown 文件被自动同步为 Issue，保留了标题、标签和正文内容。
 
+修复了 issue 重复创建和本地图片路径的问题。
+
 ![测试图](assets/figures/test.png)

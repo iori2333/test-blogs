@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 try:
     import yaml
@@ -173,6 +175,27 @@ def find_issue_for_file(filepath: Path) -> str | None:
     return _issue_map.get(rel_path)
 
 
+def gh_api_request(method: str, path: str, data: dict | None = None) -> dict | None:
+    """Make a GitHub REST API call using urllib (no external deps)."""
+    url = f"https://api.github.com/{path}"
+    token = os.environ["GH_TOKEN"]
+    body = json.dumps(data).encode() if data else None
+    req = Request(url, data=body, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urlopen(req) as resp:
+            if resp.status == 204:
+                return None
+            return json.loads(resp.read())
+    except HTTPError as e:
+        err_body = e.read().decode()
+        print(f"  API {method} {path} failed ({e.code}): {err_body}",
+              file=sys.stderr)
+        return None
+
+
 def create_issue(filepath: Path, frontmatter: dict, repo: str) -> str | None:
     """Create a new Issue for a blog post. Returns Issue number."""
     title = frontmatter.get("title", filepath.stem)
@@ -183,32 +206,20 @@ def create_issue(filepath: Path, frontmatter: dict, repo: str) -> str | None:
     for label in labels:
         ensure_label(label, repo)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-        f.write(body)
-        body_file = f.name
+    result = gh_api_request("POST", f"repos/{repo}/issues", {
+        "title": title,
+        "body": body,
+        "labels": labels,
+    })
+    if result is None:
+        print(f"  Failed to create issue for {filepath}", file=sys.stderr)
+        return None
 
-    try:
-        args = [
-            "gh", "issue", "create", "--repo", repo,
-            "--title", title, "--body-file", body_file,
-        ]
-        if labels:
-            args.extend(["--label", ",".join(labels)])
-
-        result = subprocess.run(args, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Failed to create issue for {filepath}: {result.stderr}",
-                  file=sys.stderr)
-            return None
-
-        url = result.stdout.strip()
-        number = url.rstrip("/").split("/")[-1]
-        rel_path = str(filepath.relative_to(Path(".")))
-        _issue_map[rel_path] = number
-        print(f"  Created issue #{number} for {filepath}")
-        return number
-    finally:
-        os.unlink(body_file)
+    number = str(result["number"])
+    rel_path = str(filepath.relative_to(Path(".")))
+    _issue_map[rel_path] = number
+    print(f"  Created issue #{number} for {filepath}")
+    return number
 
 
 def update_issue(issue_number: str, filepath: Path, frontmatter: dict, repo: str) -> None:
@@ -221,24 +232,12 @@ def update_issue(issue_number: str, filepath: Path, frontmatter: dict, repo: str
     for label in labels:
         ensure_label(label, repo)
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-        f.write(body)
-        body_file = f.name
-
-    try:
-        # gh issue edit requires --title whenever labels are changed (newer gh)
-        subprocess.run(
-            ["gh", "issue", "edit", issue_number, "--repo", repo,
-             "--title", title, "--body-file", body_file,
-             "--remove-label", BLOG_LABEL,
-             "--add-label", ",".join(labels)],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        print(f"  Updated issue #{issue_number} for {filepath}")
-    finally:
-        os.unlink(body_file)
+    gh_api_request("PATCH", f"repos/{repo}/issues/{issue_number}", {
+        "title": title,
+        "body": body,
+        "labels": labels,
+    })
+    print(f"  Updated issue #{issue_number} for {filepath}")
 
 
 def close_issue(issue_number: str, repo: str) -> None:

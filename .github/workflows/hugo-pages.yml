@@ -29,17 +29,16 @@ jobs:
           hugo-version: '0.147.0'
           extended: true
 
-      - name: Create content symlinks
+      - name: Setup content
         run: |
           mkdir -p content
-          ln -sfn ../posts content/posts
-          ln -sfn ../assets content/assets
+          cp -r posts content/posts
+          cp -r assets content/assets
 
       - name: Download PaperMod theme
         run: |
           mkdir -p themes
-          curl -sL https://github.com/adityatelange/hugo-PaperMod/archive/refs/tags/v8.0.tar.gz | tar xz -C themes
-          mv themes/hugo-PaperMod-* themes/PaperMod
+          git clone --depth 1 https://github.com/adityatelange/hugo-PaperMod.git themes/PaperMod
 
       - name: Build with Hugo
         run: hugo --minify --gc

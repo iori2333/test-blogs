@@ -18,9 +18,9 @@ theme = "PaperMod"
   Title = "Blog"
   Content = "Welcome to my blog."
 
-[params.socialIcons]
-  - name = "github"
-    url = "https://github.com/iori2333"
+[[params.socialIcons]]
+  name = "github"
+  url = "https://github.com/iori2333"
 
 [outputs]
   home = ["HTML", "RSS"]

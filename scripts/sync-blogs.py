@@ -84,6 +84,15 @@ def extract_body(filepath: Path) -> str:
     return match.group(1).strip() if match else content.strip()
 
 
+def convert_single_path(src: str, base_url: str) -> str:
+    """Convert a single image src to absolute raw.githubusercontent.com URL."""
+    if src.startswith("http://") or src.startswith("https://"):
+        return src
+    if src.startswith("/"):
+        src = src.lstrip("/")
+    return f"{base_url}{src}"
+
+
 def convert_image_paths(content: str, base_url: str, file_path: str) -> str:
     """Convert relative image paths to absolute raw.githubusercontent.com URLs.
 
@@ -95,7 +104,7 @@ def convert_image_paths(content: str, base_url: str, file_path: str) -> str:
         if src.startswith("http://") or src.startswith("https://"):
             return match.group(0)
         if src.startswith("/"):
-            return f"![{alt}]({base_url}{src.lstrip('/')})"
+            src = src.lstrip("/")
         # Relative: resolve against file's parent directory
         if file_path:
             parent = Path(file_path).parent
@@ -110,10 +119,15 @@ def convert_image_paths(content: str, base_url: str, file_path: str) -> str:
 
 def build_issue_body(filepath: Path, frontmatter: dict, repo: str) -> str:
     """Build the GitHub Issue body from markdown content and frontmatter."""
+    owner, name = repo.split("/")
+    branch = os.environ.get("BRANCH", "main")
+    raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/refs/heads/{branch}/"
+
     parts = []
 
     if frontmatter.get("cover"):
-        parts.append(f'<img src="{frontmatter["cover"]}" alt="Cover" style="max-width:100%;" />')
+        cover_src = convert_single_path(frontmatter["cover"], raw_base)
+        parts.append(f'<img src="{cover_src}" alt="Cover" style="max-width:100%;" />')
         parts.append("")
 
     if frontmatter.get("description"):
@@ -121,11 +135,6 @@ def build_issue_body(filepath: Path, frontmatter: dict, repo: str) -> str:
         parts.append("")
 
     body = extract_body(filepath)
-
-    # Convert relative image paths to absolute URLs
-    owner, name = repo.split("/")
-    branch = os.environ.get("BRANCH", "main")
-    raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/refs/heads/{branch}/"
     rel_path = str(filepath.relative_to(Path(".")))
     body = convert_image_paths(body, raw_base, rel_path)
 

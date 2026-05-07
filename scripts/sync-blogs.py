@@ -3,6 +3,7 @@
 
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -19,6 +20,9 @@ POSTS_DIR = Path("posts")
 MARKER_TEMPLATE = "<!-- blog-sync: path={} -->"
 BLOG_LABEL = "blog"
 
+# Cache: {rel_file_path: issue_number}
+_issue_map: dict[str, str] = {}
+
 
 def gh(args: list[str], check: bool = True) -> str:
     """Run a gh CLI command and return stdout."""
@@ -31,6 +35,37 @@ def gh(args: list[str], check: bool = True) -> str:
         print(f"gh error: {result.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
     return result.stdout
+
+
+def gh_api_list_issues(repo: str) -> list[dict]:
+    """Fetch all open blog Issues via GitHub API, handling pagination."""
+    all_issues = []
+    page = 1
+    while True:
+        resp = gh([
+            "api", f"repos/{repo}/issues",
+            "-f", f"labels={BLOG_LABEL}",
+            "-f", "state=open",
+            "-f", "per_page=100",
+            "-f", f"page={page}",
+        ])
+        items = json.loads(resp)
+        if not items:
+            break
+        all_issues.extend(items)
+        page += 1
+    return all_issues
+
+
+def build_issue_map(repo: str) -> dict[str, str]:
+    """Build {file_path: issue_number} mapping from existing blog Issues."""
+    mapping = {}
+    for issue in gh_api_list_issues(repo):
+        body = issue.get("body") or ""
+        match = re.search(r"<!-- blog-sync: path=(.+?) -->", body)
+        if match:
+            mapping[match.group(1)] = str(issue["number"])
+    return mapping
 
 
 def parse_frontmatter(filepath: Path) -> dict | None:
@@ -55,7 +90,28 @@ def extract_body(filepath: Path) -> str:
     return match.group(1).strip() if match else content.strip()
 
 
-def build_issue_body(filepath: Path, frontmatter: dict) -> str:
+def convert_image_paths(content: str, base_url: str, file_path: str) -> str:
+    """Convert relative image paths to absolute raw.githubusercontent.com URLs."""
+    def replace(match):
+        alt = match.group(1)
+        src = match.group(2)
+        if src.startswith("http://") or src.startswith("https://"):
+            return match.group(0)
+        if src.startswith("/"):
+            return f"![{alt}]({base_url}{src.lstrip('/')})"
+        # Relative: resolve against file's parent directory
+        if file_path:
+            parent = Path(file_path).parent
+            resolved = parent / src
+            normalized = posixpath.normpath(str(resolved))
+            if normalized.startswith("/"):
+                normalized = normalized[1:]
+            return f"![{alt}]({base_url}{normalized})"
+        return f"![{alt}]({base_url}{src})"
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace, content)
+
+
+def build_issue_body(filepath: Path, frontmatter: dict, repo: str) -> str:
     """Build the GitHub Issue body from markdown content and frontmatter."""
     parts = []
 
@@ -67,10 +123,19 @@ def build_issue_body(filepath: Path, frontmatter: dict) -> str:
         parts.append(f'> {frontmatter["description"]}')
         parts.append("")
 
-    parts.append(extract_body(filepath))
+    body = extract_body(filepath)
+
+    # Convert relative image paths to absolute URLs
+    owner, name = repo.split("/")
+    branch = os.environ.get("BRANCH", "main")
+    raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
+    rel_path = str(filepath.relative_to(Path(".")))
+    body = convert_image_paths(body, raw_base, rel_path)
+
+    parts.append(body)
     parts.append("")
 
-    rel_path = filepath.relative_to(Path("."))
+    # Hidden marker for file-to-Issue mapping
     parts.append(MARKER_TEMPLATE.format(rel_path))
 
     return "\n".join(parts)
@@ -83,9 +148,8 @@ def normalize_tag(tag: str) -> str:
     return label[:50]
 
 
-def ensure_label(label: str) -> None:
+def ensure_label(label: str, repo: str) -> None:
     """Create a GitHub label if it doesn't exist."""
-    repo = os.environ["REPO"]
     result = subprocess.run(
         ["gh", "label", "list", "--repo", repo, "--json", "name"],
         capture_output=True,
@@ -104,36 +168,21 @@ def ensure_label(label: str) -> None:
 
 
 def find_issue_for_file(filepath: Path) -> str | None:
-    """Find an existing Issue by searching for the file-path marker."""
-    repo = os.environ["REPO"]
+    """Look up the Issue number from the in-memory mapping."""
     rel_path = str(filepath.relative_to(Path(".")))
-    marker = MARKER_TEMPLATE.format(rel_path)
-    # Escape the marker for gh search (quote it)
-    result = subprocess.run(
-        ["gh", "search", "issues", f'"{marker}"', "--repo", repo,
-         "--limit", "1", "--json", "number"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-
-    issues = json.loads(result.stdout)
-    return str(issues[0]["number"]) if issues else None
+    return _issue_map.get(rel_path)
 
 
-def create_issue(filepath: Path, frontmatter: dict) -> str | None:
+def create_issue(filepath: Path, frontmatter: dict, repo: str) -> str | None:
     """Create a new Issue for a blog post. Returns Issue number."""
-    repo = os.environ["REPO"]
     title = frontmatter.get("title", filepath.stem)
-    body = build_issue_body(filepath, frontmatter)
+    body = build_issue_body(filepath, frontmatter, repo)
     tags = [normalize_tag(t) for t in frontmatter.get("tags", [])]
     labels = [BLOG_LABEL] + [t for t in tags if t]
 
     for label in labels:
-        ensure_label(label)
+        ensure_label(label, repo)
 
-    # Use --body-file to avoid shell argument limits
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write(body)
         body_file = f.name
@@ -152,25 +201,25 @@ def create_issue(filepath: Path, frontmatter: dict) -> str | None:
                   file=sys.stderr)
             return None
 
-        # Extract issue number from URL in output
         url = result.stdout.strip()
         number = url.rstrip("/").split("/")[-1]
+        rel_path = str(filepath.relative_to(Path(".")))
+        _issue_map[rel_path] = number
         print(f"  Created issue #{number} for {filepath}")
         return number
     finally:
         os.unlink(body_file)
 
 
-def update_issue(issue_number: str, filepath: Path, frontmatter: dict) -> None:
+def update_issue(issue_number: str, filepath: Path, frontmatter: dict, repo: str) -> None:
     """Update an existing Issue's body and labels."""
-    repo = os.environ["REPO"]
     title = frontmatter.get("title", filepath.stem)
-    body = build_issue_body(filepath, frontmatter)
+    body = build_issue_body(filepath, frontmatter, repo)
     tags = [normalize_tag(t) for t in frontmatter.get("tags", [])]
     labels = [BLOG_LABEL] + [t for t in tags if t]
 
     for label in labels:
-        ensure_label(label)
+        ensure_label(label, repo)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write(body)
@@ -184,7 +233,13 @@ def update_issue(issue_number: str, filepath: Path, frontmatter: dict) -> None:
             text=True,
         )
 
-        # Replace all labels (remove old ones, add new ones)
+        # Remove old blog-related labels first, then add new ones
+        subprocess.run(
+            ["gh", "issue", "edit", issue_number, "--repo", repo,
+             "--remove-label", BLOG_LABEL],
+            capture_output=True,
+            text=True,
+        )
         subprocess.run(
             ["gh", "issue", "edit", issue_number, "--repo", repo,
              "--add-label", ",".join(labels)],
@@ -196,9 +251,8 @@ def update_issue(issue_number: str, filepath: Path, frontmatter: dict) -> None:
         os.unlink(body_file)
 
 
-def close_issue(issue_number: str) -> None:
+def close_issue(issue_number: str, repo: str) -> None:
     """Close an Issue when its corresponding file was deleted."""
-    repo = os.environ["REPO"]
     subprocess.run(
         ["gh", "issue", "close", issue_number, "--repo", repo],
         capture_output=True,
@@ -207,7 +261,7 @@ def close_issue(issue_number: str) -> None:
     print(f"  Closed issue #{issue_number} (file deleted)")
 
 
-def sync_forward() -> list[str]:
+def sync_forward(repo: str) -> list[str]:
     """Sync .md files -> Issues. Returns list of active file paths."""
     active_paths = []
 
@@ -233,39 +287,18 @@ def sync_forward() -> list[str]:
 
         issue_number = find_issue_for_file(filepath)
         if issue_number:
-            update_issue(issue_number, filepath, frontmatter)
+            update_issue(issue_number, filepath, frontmatter, repo)
         else:
-            create_issue(filepath, frontmatter)
+            create_issue(filepath, frontmatter, repo)
 
     return active_paths
 
 
-def sync_reverse(active_paths: list[str]) -> None:
-    """Find Issues for deleted files and close them."""
-    repo = os.environ["REPO"]
-
-    # Search for all open issues with our blog-sync marker
-    result = subprocess.run(
-        ["gh", "search", "issues", '"<!-- blog-sync: path="',
-         "--state", "open", "--repo", repo,
-         "--limit", "100", "--json", "number,body"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"  Failed to search issues: {result.stderr}", file=sys.stderr)
-        return
-
-    issues = json.loads(result.stdout) if result.stdout.strip() else []
-    for issue in issues:
-        body = issue.get("body") or ""
-        match = re.search(r"<!-- blog-sync: path=(.+?) -->", body)
-        if not match:
-            continue
-
-        file_path = match.group(1)
+def sync_reverse(repo: str, active_paths: list[str]) -> None:
+    """Find Issues for deleted files and close them using in-memory mapping."""
+    for file_path, issue_number in dict(_issue_map).items():
         if file_path not in active_paths:
-            close_issue(str(issue["number"]))
+            close_issue(issue_number, repo)
 
 
 def main():
@@ -274,9 +307,17 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    repo = os.environ["REPO"]
+
     print("Starting blog sync...")
-    active_paths = sync_forward()
-    sync_reverse(active_paths)
+    # Build mapping from existing Issues before making any changes
+    print("  Fetching existing blog Issues...")
+    global _issue_map
+    _issue_map = build_issue_map(repo)
+    print(f"  Found {len(_issue_map)} existing blog Issue(s)")
+
+    active_paths = sync_forward(repo)
+    sync_reverse(repo, active_paths)
     print("Sync complete.")
 
 

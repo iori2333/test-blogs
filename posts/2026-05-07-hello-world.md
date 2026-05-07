@@ -3,7 +3,7 @@ title: "Hello World"
 tags: [meta]
 draft: false
 cover: "assets/figures/test.png"
-description: "介绍基于 GitHub Issues 的个人博客系统。"
+description: "介绍基于 GitHub Issues 的个人博客系统的设计与实现。"
 ---
 
 ## 动机
@@ -48,10 +48,12 @@ flowchart TD
     B -->|否| C[跳过]
     B -->|是| D{存在对应 Issue?}
     D -->|否| E[创建 Issue]
-    D -->|是| F[更新 Issue]
-    G[搜索所有 blog 标签的 open Issue] --> H{对应文件仍存在?}
-    H -->|否| I[关闭 Issue]
-    H -->|是| J[保留]
+    D -->|是| F{hash 是否一致?}
+    F -->|是| G[跳过]
+    F -->|否| H[更新 Issue]
+    I[搜索所有 blog 标签的 open Issue] --> J{对应文件仍存在?}
+    J -->|否| K[关闭 Issue]
+    J -->|是| L[保留]
 ```
 
 ### Issue 与文件的映射
@@ -59,10 +61,14 @@ flowchart TD
 在 Issue body 末尾追加 HTML 注释作为隐藏标识：
 
 ```html
-<!-- blog-sync: path=posts/2026-05-07-hello-world.md -->
+<!-- blog-sync: path=posts/2026-05-07-hello-world.md hash=abc123... -->
 ```
 
-同步时通过 `gh issue list` 拉取所有 `blog` 标签的 Issue，在内存中按此标识建立 `{文件路径: Issue 编号}` 映射，避免使用 GitHub 搜索索引（HTML 注释不被索引）。
+包含路径和文件内容的 md5 hash。同步时通过 `gh issue list` 拉取所有 `blog` 标签的 Issue，在内存中建立 `{文件路径: (Issue 编号, hash)}` 映射。
+
+映射建立时有两层校验：
+1. **发布者验证**：仅接受 `github-actions[bot]` 创建的 Issue，防止他人手动创建带相同标记的 Issue 干扰同步
+2. **内容 hash 比较**：比对当前文件 hash 与 Issue 中存储的 hash，一致则跳过更新，避免不必要的 API 调用
 
 ### 图片路径处理
 
@@ -106,8 +112,8 @@ assets/
 
 Python 脚本，仅依赖 `pyyaml`。所有 GitHub 操作通过 `gh` CLI 和 REST API 完成：
 
-1. **拉取映射**：`gh issue list --label blog` 获取所有 open 博客 Issue，解析 body 中的隐藏标识建立文件映射
-2. **正向同步**：遍历 `.md` 文件，命中映射则更新 Issue，否则创建新 Issue
+1. **拉取映射**：`gh issue list --label blog` 获取所有 open 博客 Issue，验证发布者为 `github-actions[bot]` 后解析 body 中的路径和 md5 hash，建立 `{文件路径: (Issue 编号, hash)}` 映射
+2. **正向同步**：遍历 `.md` 文件，计算当前文件 md5，与映射中的 hash 一致则跳过更新；不一致则更新 Issue；无映射则创建新 Issue
 3. **反向同步**：遍历内存映射，文件不存在则关闭对应 Issue
 
 创建 Issue 时使用 `POST /repos/{owner}/{repo}/issues` REST API，避免 `gh issue create` 在处理长 body 和标签时的参数限制。更新 Issue 时使用 `PATCH` 接口直接更新 title、body 和 labels。

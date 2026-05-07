@@ -45,16 +45,23 @@ def gh_api_list_issues(repo: str) -> list[dict]:
         "issue", "list", "--repo", repo,
         "--state", "open",
         "--label", BLOG_LABEL,
-        "--json", "number,body",
+        "--json", "number,body,author",
         "--limit", "100",
     ], check=False)
     return json.loads(resp) if resp.strip() else []
 
 
 def build_issue_map(repo: str) -> dict[str, str]:
-    """Build {file_path: issue_number} mapping from existing blog Issues."""
+    """Build {file_path: issue_number} mapping from existing blog Issues.
+
+    Only considers issues created by github-actions[bot] to avoid
+    accidentally processing user-created issues with similar markers.
+    """
     mapping = {}
     for issue in gh_api_list_issues(repo):
+        author = issue.get("author", {})
+        if author.get("is_bot") is not True:
+            continue
         body = issue.get("body") or ""
         match = re.search(r"<!-- blog-sync: path=(.+?) -->", body)
         if match:

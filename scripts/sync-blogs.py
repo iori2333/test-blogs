@@ -85,7 +85,10 @@ def extract_body(filepath: Path) -> str:
 
 
 def convert_image_paths(content: str, base_url: str, file_path: str) -> str:
-    """Convert relative image paths to absolute raw.githubusercontent.com URLs."""
+    """Convert relative image paths to absolute raw.githubusercontent.com URLs.
+
+    Resolves relative paths against the .md file's parent directory.
+    """
     def replace(match):
         alt = match.group(1)
         src = match.group(2)
@@ -122,7 +125,7 @@ def build_issue_body(filepath: Path, frontmatter: dict, repo: str) -> str:
     # Convert relative image paths to absolute URLs
     owner, name = repo.split("/")
     branch = os.environ.get("BRANCH", "main")
-    raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
+    raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/refs/heads/{branch}/"
     rel_path = str(filepath.relative_to(Path(".")))
     body = convert_image_paths(body, raw_base, rel_path)
 

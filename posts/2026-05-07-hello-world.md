@@ -14,4 +14,4 @@ Markdown 文件被自动同步为 Issue，保留了标题、标签和正文内�
 
 修复了 issue 重复创建和本地图片路径的问题。
 
-![测试图](assets/figures/test.png)
+![测试图](../assets/figures/test.png)

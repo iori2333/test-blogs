@@ -2,7 +2,7 @@
 title: "Hello World"
 tags: [meta]
 draft: false
-cover: ""
+cover: "assets/figures/test.png"
 description: "第一篇博客，测试 GitHub Issues 博客同步系统。"
 ---
 
